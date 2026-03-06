@@ -16,7 +16,6 @@ from openpyxl.cell import WriteOnlyCell
 from openpyxl.styles import PatternFill, Font
 
 
-from pyrevit import revit
 from System.Windows.Forms import SaveFileDialog, DialogResult, MessageBox, MessageBoxButtons, MessageBoxIcon
 from System.IO import File
 
