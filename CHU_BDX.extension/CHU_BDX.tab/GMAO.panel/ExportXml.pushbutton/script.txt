@@ -1,0 +1,47 @@
+# -*- coding: utf-8 -*-
+
+from Autodesk.Revit.DB import *
+from pyrevit import revit
+from collections import defaultdict
+import xlsxwriter
+
+doc   = __revit__.ActiveUIDocument.Document
+uidoc = __revit__.ActiveUIDocument
+app   = __revit__.Application
+view  = doc.ActiveView
+
+#Get All View
+all_views = FilteredElementCollector(doc).OfClass(View).WhereElementIsNotElementType().ToElements()
+
+#print (list(wall.Parameters))
+
+#for p in wall.Parameters:
+#   print(p)
+#  print('Name:            {}'.format(p.Definition.Name))
+# print('BuiltInParameter:{}'.format(p.Definition.BuiltInParameter))
+#print('StorageType:     {}'.format(p.StorageType))
+#print('ReadOnly:        {}'.format(p.IsReadOnly))
+#print('IsShared:        {}'.format(p.IsShared))
+#print('-'*50)
+
+#wall_comment = wall.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)
+#wall_type_name = wall.get_Parameter(BuiltInParameter.ELEM_TYPE_PARAM).AsValueString()
+
+#class SelectionFilter(ISelectionFilter):
+
+# Fonction pour collecter et trier les éléments par catégories
+def collect_and_sort_elements(doc):
+    collector = FilteredElementCollector(doc).WherePasses(
+        LogicalOrFilter(ElementIsElementTypeFilter(False), ElementIsElementTypeFilter(True))
+    )
+    sorted_elements = defaultdict(list)
+    for element in collector:
+        category = element.Category
+        if category and category.Name:
+            sorted_elements[category.Name].append(element)
+    return sorted_elements
+
+# Collecte et tri des éléments
+sorted_elements = collect_and_sort_elements(doc)
+
+print (sorted_elements)
