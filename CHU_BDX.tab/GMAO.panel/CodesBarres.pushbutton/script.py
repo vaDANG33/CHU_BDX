@@ -134,7 +134,7 @@ def build_pdf(items, pdf_path):
 # 5. Exécution + ouverture optionnelle
 # ---------------------------------------------------------
 output.print_md("**Génération en cours...**\n")
-#build_pdf(selected, PDF_OUTPUT)
+build_pdf(selected, PDF_OUTPUT)
 output.print_md("\n📄 **PDF :** `{}`".format(PDF_OUTPUT))
 
 if forms.ask_for_one_item(
