@@ -104,5 +104,5 @@ entities = XElement("entities",
 # ---------------------------------------------------------
 # 4. Sauvegarde
 # ---------------------------------------------------------
-#XDocument(entities).Save(save_path)
-#forms.alert("Export XML terminé :\n{}".format(save_path))
+XDocument(entities).Save(save_path)
+forms.alert("Export XML terminé :\n{}".format(save_path))
