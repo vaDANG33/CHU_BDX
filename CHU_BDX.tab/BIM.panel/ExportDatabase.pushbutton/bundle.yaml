@@ -1,3 +1,5 @@
-title: "Export XLSX\nDatabase"
-tooltip: Export Database en Excel
-author: V@D
+title: "Export Database\nXLSX"
+tooltip: Export complet du modèle Revit en Excel avec détection spatiale
+author: "V@D"
+beta: false
+requires: ">=2020"

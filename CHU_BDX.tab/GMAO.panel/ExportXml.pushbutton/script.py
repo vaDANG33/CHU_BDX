@@ -4,6 +4,15 @@ from pyrevit import forms, revit
 import System
 from System.Xml.Linq import XDocument, XElement, XAttribute
 
+# Configuration
+SITES = ["TEC-HL", "TEC-PEL", "TEC-SA", "TEC-DG"]
+DEFAULT_SITE = "TEC-HL"
+STATUS_CHANGED_BY_CODE = "CARLSOURCE"
+STATUS_CHANGED_BY_ID = "15"
+STATUS_CODE = "VALIDATE"
+STRUCTURE_CODE = "GEOGRAPHIQUE"
+DATE_FORMAT = "yyyy-MM-dd HH:mm:ss"
+
 doc = revit.doc
 
 # ---------------------------------------------------------
@@ -45,9 +54,9 @@ if not selected:
     raise SystemExit
 
 site = forms.ask_for_one_item(
-    ["TEC-HL", "TEC-PEL", "TEC-SA", "TEC-DG"],
+    SITES,
     title="Choisir le site",
-    default="TEC-HL",
+    default=DEFAULT_SITE,
     prompt="Sélectionnez le site :"
 )
 if not site:
@@ -66,7 +75,7 @@ if not save_path:
 # ---------------------------------------------------------
 # 3. Construction XML
 # ---------------------------------------------------------
-date_str = System.DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+date_str = System.DateTime.Now.ToString(DATE_FORMAT)
 
 def make_box(room, site_code, date):
     num  = room.get_Parameter(BuiltInParameter.ROOM_NUMBER).AsString()
@@ -82,14 +91,14 @@ def make_box(room, site_code, date):
         XElement("box_WOAuthorized", "true"),
         XElement("box_status",
             XElement("status_changedBy",
-                XAttribute("code", "CARLSOURCE"),
-                XAttribute("id",   "15")
+                XAttribute("code", STATUS_CHANGED_BY_CODE),
+                XAttribute("id",   STATUS_CHANGED_BY_ID)
             ),
             XElement("status_changedDate", date),
-            XElement("status_code", "VALIDATE")
+            XElement("status_code", STATUS_CODE)
         ),
         XElement("box_structure",
-            XAttribute("code", "GEOGRAPHIQUE")
+            XAttribute("code", STRUCTURE_CODE)
         )
     )
 
