@@ -1,3 +1,5 @@
-title: "Imprimmer\nCodes Barres"
-tooltip: Imprimer Etiquette de Pièce
-author: V@D
+title: "Générer\nCodes QR"
+tooltip: Générer un PDF avec codes QR pour les pièces sélectionnées
+author: "V@D"
+beta: false
+requires: ">=2020"
