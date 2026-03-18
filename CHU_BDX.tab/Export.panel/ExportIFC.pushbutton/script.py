@@ -1,23 +1,4 @@
 # -*- coding: utf-8 -*-
-__title__ = "Export IFC\nARC"
-__doc__ = """Export IFC des maquettes *_ARC.rvt
-depuis un dossier et ses sous-dossiers.
-<<<<<<< HEAD
-- Gère les fichiers de versions antérieures (ex: 2023 sur 2024)
-- Crée la vue 3D_IFC_EXPORT si absente (phase 1)
-- Ferme sans enregistrer dans tous les cas"""
-
-import os
-import clr
-clr.AddReference('RevitAPI')
-from Autodesk.Revit.DB import *
-from Autodesk.Revit.DB import IFailuresPreprocessor
-from pyrevit import forms, script, HOST_APP
-
-=======
-- Détache automatiquement les fichiers workshared
-- Crée la vue 3D_IFC_EXPORT si absente (phase 1)
-- Ferme sans enregistrer dans tous les cas"""
 
 import os
 import re
@@ -27,17 +8,12 @@ from Autodesk.Revit.DB import *
 from Autodesk.Revit.DB import IFailuresPreprocessor
 from pyrevit import forms, script, HOST_APP
 
->>>>>>> 03bbe49cabe2688d959e6026c3bfb59cf5ad55b8
 logger = script.get_logger()
 output = script.get_output()
 
 
 # ──────────────────────────────────────────────────────────────
-<<<<<<< HEAD
-# HELPER : supprimer les avertissements de migration
-=======
 # HELPER : supprimer les avertissements automatiquement
->>>>>>> 03bbe49cabe2688d959e6026c3bfb59cf5ad55b8
 # ──────────────────────────────────────────────────────────────
 class SilentFailuresPreprocessor(IFailuresPreprocessor):
     def PreprocessFailures(self, failuresAccessor):
@@ -49,24 +25,12 @@ class SilentFailuresPreprocessor(IFailuresPreprocessor):
 
 # ──────────────────────────────────────────────────────────────
 # HELPER : ouvrir un document
-<<<<<<< HEAD
-# ──────────────────────────────────────────────────────────────
-def open_doc(app, file_path, detach, is_workshared):
-    opts = OpenOptions()
-    if is_workshared and detach:
-        opts.DetachFromCentralOption = DetachFromCentralOption.DetachAndPreserveWorksets
-    elif is_workshared and not detach:
-        opts.DetachFromCentralOption = DetachFromCentralOption.DoNotDetach
-        wc = WorksetConfiguration(WorksetConfigurationOption.CloseAllWorksets)
-        opts.SetOpenWorksetsConfiguration(wc)
-=======
 # ✅ Toujours détacher si workshared (évite WrongUserException)
 # ──────────────────────────────────────────────────────────────
 def open_doc(app, file_path, is_workshared):
     opts = OpenOptions()
     if is_workshared:
         opts.DetachFromCentralOption = DetachFromCentralOption.DetachAndPreserveWorksets
->>>>>>> 03bbe49cabe2688d959e6026c3bfb59cf5ad55b8
     else:
         opts.DetachFromCentralOption = DetachFromCentralOption.DoNotDetach
     mp = ModelPathUtils.ConvertUserVisiblePathToModelPath(file_path)
@@ -99,10 +63,6 @@ def create_ifc_view(doc):
         raise Exception("Aucun type de vue 3D disponible")
 
     t = Transaction(doc, "Créer vue 3D_IFC_EXPORT")
-<<<<<<< HEAD
-    # ✅ Supprimer les avertissements dans la transaction
-=======
->>>>>>> 03bbe49cabe2688d959e6026c3bfb59cf5ad55b8
     t.SetFailureHandlingOptions(
         t.GetFailureHandlingOptions().SetFailuresPreprocessor(SilentFailuresPreprocessor())
     )
@@ -128,11 +88,7 @@ def create_ifc_view(doc):
 
 # ──────────────────────────────────────────────────────────────
 # HELPER : export IFC
-<<<<<<< HEAD
-# ✅ Transaction requise par l'API Revit — RollBack après export
-=======
 # ✅ Transaction requise + RollBack pour ne pas modifier le doc
->>>>>>> 03bbe49cabe2688d959e6026c3bfb59cf5ad55b8
 # ──────────────────────────────────────────────────────────────
 def export_ifc(doc, view_3d, dir_path, base_name):
     ifc_options = IFCExportOptions()
@@ -149,10 +105,6 @@ def export_ifc(doc, view_3d, dir_path, base_name):
     ifc_options.AddOption("UseActiveViewGeometry", "true")
 
     t = Transaction(doc, "Export IFC")
-<<<<<<< HEAD
-    # ✅ Supprimer les avertissements pendant l'export
-=======
->>>>>>> 03bbe49cabe2688d959e6026c3bfb59cf5ad55b8
     t.SetFailureHandlingOptions(
         t.GetFailureHandlingOptions().SetFailuresPreprocessor(SilentFailuresPreprocessor())
     )
@@ -160,11 +112,7 @@ def export_ifc(doc, view_3d, dir_path, base_name):
     try:
         success = doc.Export(dir_path, base_name, ifc_options)
     finally:
-<<<<<<< HEAD
-        t.RollBack()  # ✅ RollBack : export écrit sur disque, doc non modifié
-=======
         t.RollBack()  # ✅ Export écrit sur disque, doc non modifié
->>>>>>> 03bbe49cabe2688d959e6026c3bfb59cf5ad55b8
     return success
 
 
@@ -177,29 +125,17 @@ if not folder:
 
 
 # ──────────────────────────────────────────────────────────────
-<<<<<<< HEAD
-# 2. Récupérer tous les *_ARC.rvt récursivement
-=======
 # 2. Récupérer tous les fichiers contenant "_ARC" récursivement
->>>>>>> 03bbe49cabe2688d959e6026c3bfb59cf5ad55b8
 # ──────────────────────────────────────────────────────────────
 rvt_files = [
     os.path.join(root, f)
     for root, dirs, files in os.walk(folder)
     for f in files
-<<<<<<< HEAD
-    if "_arc" in f.lower() and f.lower().endswith(".rvt")
-]
-
-if not rvt_files:
-    forms.alert("Aucun fichier *_ARC.rvt trouvé.", exitscript=True)
-=======
     if re.search(r'_arc', f.lower()) and f.lower().endswith(".rvt")
 ]
 
 if not rvt_files:
     forms.alert("Aucun fichier *_ARC*.rvt trouvé.", exitscript=True)
->>>>>>> 03bbe49cabe2688d959e6026c3bfb59cf5ad55b8
 
 
 # ──────────────────────────────────────────────────────────────
@@ -259,11 +195,7 @@ for file_path in selected_paths:
     output.print_md("---\n### ⚙️ Traitement : `{}`".format(fname))
 
     try:
-<<<<<<< HEAD
-        # ── Détection metadata sans ouvrir ────────────────────
-=======
         # Détecter metadata sans ouvrir le fichier
->>>>>>> 03bbe49cabe2688d959e6026c3bfb59cf5ad55b8
         try:
             basic_info = BasicFileInfo.Extract(file_path)
             is_workshared = basic_info.IsWorkshared
@@ -274,17 +206,10 @@ for file_path in selected_paths:
 
         output.print_md("- Workshared : `{}`".format(is_workshared))
         if not is_current_version:
-<<<<<<< HEAD
-            output.print_md("- ⚠️ Version antérieure détectée — migration en mémoire")
-
-        # ── Ouverture légère ──────────────────────────────────
-        doc = open_doc(app, file_path, detach=False, is_workshared=is_workshared)
-=======
             output.print_md("- ⚠️ Version antérieure — migration en mémoire")
 
         # ── Ouverture (détachée si workshared) ────────────────
         doc = open_doc(app, file_path, is_workshared=is_workshared)
->>>>>>> 03bbe49cabe2688d959e6026c3bfb59cf5ad55b8
         if not doc:
             raise Exception("Impossible d'ouvrir le fichier")
 
@@ -294,18 +219,7 @@ for file_path in selected_paths:
         if view_3d:
             output.print_md("- ✅ Vue `3D_IFC_EXPORT` trouvée")
         else:
-<<<<<<< HEAD
-            doc.Close(False)
-            doc = None
-            output.print_md("- ⚠️ Vue absente — réouverture en mode détaché...")
-
-            doc = open_doc(app, file_path, detach=True, is_workshared=is_workshared)
-            if not doc:
-                raise Exception("Impossible de rouvrir en mode détaché")
-
-=======
             output.print_md("- ⚠️ Vue absente — création en cours...")
->>>>>>> 03bbe49cabe2688d959e6026c3bfb59cf5ad55b8
             view_3d, phase_name = create_ifc_view(doc)
             output.print_md("- ✅ Vue créée (phase : *{}*)".format(phase_name))
 
