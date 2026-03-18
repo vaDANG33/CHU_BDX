@@ -1,435 +1,296 @@
-# ! python3
+# -*- coding: utf-8 -*-
+__title__ = "Export IFC\nARC"
+__doc__ = """Export IFC des maquettes *_ARC.rvt
+depuis un dossier et ses sous-dossiers.
+- Gère les fichiers de versions antérieures (ex: 2023 sur 2024)
+- Crée la vue 3D_IFC_EXPORT si absente (phase 1)
+- Ferme sans enregistrer dans tous les cas"""
+
+import os
 import clr
 clr.AddReference('RevitAPI')
 from Autodesk.Revit.DB import *
-from Autodesk.Revit.DB.Architecture import Room
-from Autodesk.Revit.DB.Mechanical import Space
+from Autodesk.Revit.DB import IFailuresPreprocessor
+from pyrevit import forms, script, HOST_APP
 
-import os
-import re
-import sys
-
-from openpyxl import Workbook
-from openpyxl.cell import WriteOnlyCell
-from openpyxl.styles import PatternFill, Font
-
-from pyrevit import revit
-from System.Windows.Forms import SaveFileDialog, DialogResult, MessageBox, MessageBoxButtons, MessageBoxIcon
-from System.IO import File
-
-doc = __revit__.ActiveUIDocument.Document
+logger = script.get_logger()
+output = script.get_output()
 
 
-# ========== FONCTION: Dialogue de sauvegarde ==========
-def get_save_path(document):
-    """Affiche le dialogue de sauvegarde avec le nom du document Revit par défaut."""
-    dialog = SaveFileDialog()
-    dialog.Filter = "Fichiers Excel (*.xlsx)|*.xlsx"
-    
-    revit_doc_name = document.Title if document.Title else "Export_Revit"
-    invalid_chars = r'[<>:"/\\|?*]'
-    clean_name = re.sub(invalid_chars, '_', revit_doc_name)
-    
-    if clean_name.lower().endswith('.rvt'):
-        clean_name = clean_name[:-4]
-    
-    dialog.FileName = "{}.xlsx".format(clean_name)
-    
-    if dialog.ShowDialog() == DialogResult.OK:
-        path = dialog.FileName
-        if not os.path.exists(path):
-            File.Create(path).Close()
-        return path
+# ──────────────────────────────────────────────────────────────
+# HELPER : supprimer les avertissements de migration
+# ──────────────────────────────────────────────────────────────
+class SilentFailuresPreprocessor(IFailuresPreprocessor):
+    def PreprocessFailures(self, failuresAccessor):
+        for failure in failuresAccessor.GetFailureMessages():
+            if failure.GetSeverity() == FailureSeverity.Warning:
+                failuresAccessor.DeleteWarning(failure)
+        return FailureProcessingResult.Continue
+
+
+# ──────────────────────────────────────────────────────────────
+# HELPER : ouvrir un document
+# ──────────────────────────────────────────────────────────────
+def open_doc(app, file_path, detach, is_workshared):
+    opts = OpenOptions()
+    if is_workshared and detach:
+        opts.DetachFromCentralOption = DetachFromCentralOption.DetachAndPreserveWorksets
+    elif is_workshared and not detach:
+        opts.DetachFromCentralOption = DetachFromCentralOption.DoNotDetach
+        wc = WorksetConfiguration(WorksetConfigurationOption.CloseAllWorksets)
+        opts.SetOpenWorksetsConfiguration(wc)
+    else:
+        opts.DetachFromCentralOption = DetachFromCentralOption.DoNotDetach
+    mp = ModelPathUtils.ConvertUserVisiblePathToModelPath(file_path)
+    return app.OpenDocumentFile(mp, opts)
+
+
+# ──────────────────────────────────────────────────────────────
+# HELPER : chercher la vue 3D_IFC_EXPORT
+# ──────────────────────────────────────────────────────────────
+def find_ifc_view(doc):
+    for v in FilteredElementCollector(doc).OfClass(View3D):
+        if v.Name == "3D_IFC_EXPORT" and not v.IsTemplate:
+            return v
     return None
 
 
-# ========== FONCTION: Obtenir la première phase (Existant) ==========
-def get_existing_phase(document):
-    """
-    Retourne la première phase du document (phase existante/état des lieux).
-    Les phases sont toujours ordonnées de la plus ancienne à la plus récente.
-    """
-    phases = document.Phases
-    if phases.Size > 0:
-        return phases[0]
-    return None
+# ──────────────────────────────────────────────────────────────
+# HELPER : créer la vue 3D_IFC_EXPORT avec la 1ère phase
+# ──────────────────────────────────────────────────────────────
+def create_ifc_view(doc):
+    if doc.IsReadOnly:
+        raise Exception("Document en lecture seule — impossible de créer la vue")
 
-
-# ========== FONCTION: Vérifier les Rooms dans document ==========
-def has_rooms_in_document(document):
-    """Vérifie si le document contient des Rooms."""
-    try:
-        rooms = FilteredElementCollector(document) \
-            .OfCategory(BuiltInCategory.OST_Rooms) \
-            .WhereElementIsNotElementType() \
-            .ToElements()
-        return len(list(rooms)) > 0
-    except:
-        return False
-
-
-# ========== FONCTION: Vérifier les Spaces dans document ==========
-def has_spaces_in_document(document):
-    """Vérifie si le document contient des Spaces."""
-    try:
-        spaces = FilteredElementCollector(document) \
-            .OfCategory(BuiltInCategory.OST_MEPSpaces) \
-            .WhereElementIsNotElementType() \
-            .ToElements()
-        return len(list(spaces)) > 0
-    except:
-        return False
-
-
-# ========== FONCTION: Obtenir le document lié ARC avec Rooms ==========
-def get_arc_linked_document(document):
-    """
-    Récupère le document lié ARC contenant des Rooms.
-    Optimisé pour une seule maquette ARC.
-    """
-    try:
-        link_instances = FilteredElementCollector(document) \
-            .OfClass(RevitLinkInstance) \
-            .ToElements()
-        
-        for link_instance in link_instances:
-            try:
-                linked_doc = link_instance.GetLinkDocument()
-                
-                if linked_doc and not linked_doc.IsFamilyDocument:
-                    # Vérifier si c'est une maquette ARC
-                    doc_name = linked_doc.Title.upper()
-                    if 'ARC' in doc_name or 'ARCHI' in doc_name:
-                        # Vérifier qu'elle contient des Rooms
-                        if has_rooms_in_document(linked_doc):
-                            return {
-                                'document': linked_doc,
-                                'instance': link_instance,
-                                'transform': link_instance.GetTotalTransform(),
-                                'name': linked_doc.Title
-                            }
-            except:
-                continue
-        
-    except Exception as e:
-        print("Erreur recuperation lien ARC: {}".format(str(e)))
-    
-    return None
-
-
-# ========== FONCTION: Obtenir Room dans document actuel ==========
-def get_room_in_current_doc(doc, point, phase):
-    """Cherche un Room à un point dans le document actuel."""
-    try:
-        if phase:
-            room = doc.GetRoomAtPoint(point, phase)
-            if room:
-                room_number = room.get_Parameter(BuiltInParameter.ROOM_NUMBER).AsString()
-                return room_number if room_number else ""
-    except:
-        pass
-    return None
-
-
-# ========== FONCTION: Obtenir Room dans document lié ARC ==========
-def get_room_in_linked_arc(linked_arc, point):
-    """Cherche un Room dans le document lié ARC."""
-    if not linked_arc:
-        return None
-    
-    try:
-        linked_doc = linked_arc['document']
-        transform = linked_arc['transform']
-        
-        # Transformer le point du document hôte vers le document lié
-        transformed_point = transform.Inverse.OfPoint(point)
-        
-        # Utiliser la première phase du document lié
-        linked_phase = get_existing_phase(linked_doc)
-        
-        if linked_phase:
-            room = linked_doc.GetRoomAtPoint(transformed_point, linked_phase)
-            if room:
-                room_number = room.get_Parameter(BuiltInParameter.ROOM_NUMBER).AsString()
-                return room_number if room_number else ""
-    except Exception as e:
-        print("Erreur lien ARC: {}".format(str(e)))
-    
-    return None
-
-
-# ========== FONCTION: Obtenir Space dans document actuel ==========
-def get_space_in_current_doc(doc, point):
-    """Cherche un Space à un point dans le document actuel."""
-    try:
-        spaces = FilteredElementCollector(doc) \
-            .OfCategory(BuiltInCategory.OST_MEPSpaces) \
-            .WhereElementIsNotElementType() \
-            .ToElements()
-        
-        for space in spaces:
-            if space.IsPointInSpace(point):
-                space_number = space.get_Parameter(BuiltInParameter.ROOM_NUMBER).AsString()
-                return space_number if space_number else ""
-    except:
-        pass
-    return None
-
-
-# ========== FONCTION: Obtenir numéro de Room ou Space ==========
-def get_spatial_number(doc, element, phase, has_rooms, has_spaces, linked_arc):
-    """
-    Stratégie optimisée pour une seule maquette ARC:
-    1. Room dans document actuel
-    2. Room dans maquette ARC liée
-    3. Space dans document actuel
-    """
-    try:
-        location = element.Location
-        
-        if location is None:
-            return ""
-        
-        if isinstance(location, LocationPoint):
-            point = location.Point
-        elif isinstance(location, LocationCurve):
-            curve = location.Curve
-            point = curve.Evaluate(0.5, True)
-        else:
-            return ""
-        
-        # 1. Chercher Room dans document actuel
-        if has_rooms:
-            room_number = get_room_in_current_doc(doc, point, phase)
-            if room_number:
-                return room_number
-        
-        # 2. Chercher Room dans maquette ARC liée
-        if linked_arc:
-            room_number = get_room_in_linked_arc(linked_arc, point)
-            if room_number:
-                return room_number
-        
-        # 3. Chercher Space dans document actuel
-        if has_spaces:
-            space_number = get_space_in_current_doc(doc, point)
-            if space_number:
-                return space_number
-        
-    except Exception as e:
-        print("Erreur detection spatiale: {}".format(str(e)))
-    
-    return ""
-
-
-# ========== FONCTION: Collecte optimisée par catégorie ==========
-def collect_and_sort_elements_optimized(document):
-    """Collecte les éléments en filtrant directement par catégorie."""
-    sorted_elements = {}
-    categories = document.Settings.Categories
-    
-    for cat in categories:
-        try:
-            instances = FilteredElementCollector(document) \
-                .OfCategoryId(cat.Id) \
-                .WhereElementIsNotElementType() \
-                .ToElements()
-            
-            types = FilteredElementCollector(document) \
-                .OfCategoryId(cat.Id) \
-                .WhereElementIsElementType() \
-                .ToElements()
-            
-            elements = list(instances) + list(types)
-            
-            if elements:
-                sorted_elements[cat.Name] = elements
-        except:
-            continue
-    
-    return sorted_elements
-
-
-# ========== FONCTION: Nettoyage des noms de feuilles ==========
-def clean_sheet_name(name, existing_names):
-    """Nettoie et valide les noms de feuilles Excel (max 31 caractères)."""
-    max_length = 31
-    invalid_chars = r'[\\/*?:\[\]]'
-    base = re.sub(invalid_chars, '_', name)[:max_length]
-    
-    if base not in existing_names:
-        return base
-    
-    for i in range(1, 1000):
-        suffix = f"_{i}"
-        new_name = f"{base[:max_length - len(suffix)]}{suffix}"
-        if new_name not in existing_names:
-            return new_name
-    return base[:max_length]
-
-
-# ========== FONCTION: Création des cellules stylisées ==========
-def create_styled_header_cells(ws, headers):
-    """Crée une ligne d'en-tête stylisée pour le mode write_only."""
-    header_cells = []
-    fill = PatternFill(start_color='FFCC00', end_color='FFCC00', fill_type='solid')
-    font = Font(bold=True)
-    
-    for header_text in headers:
-        cell = WriteOnlyCell(ws, value=header_text)
-        cell.fill = fill
-        cell.font = font
-        header_cells.append(cell)
-    
-    return header_cells
-
-
-# ========== FONCTION: Export optimisé ==========
-def export_to_excel_optimized(sorted_elements, path, document, phase, 
-                              has_rooms, has_spaces, linked_arc):
-    """Export avec détection Room/Space (actuel + lien ARC)."""
-    wb = Workbook(write_only=True)
-    used_sheet_names = set()
-    
-    for cat_name, elements in sorted(sorted_elements.items()):
-        try:
-            param_names = set()
-            for el in elements:
-                for param in el.Parameters:
-                    if param.Definition:
-                        param_names.add(param.Definition.Name)
-            param_names = sorted(param_names)
-            
-            sheet_name = clean_sheet_name(cat_name, used_sheet_names)
-            used_sheet_names.add(sheet_name)
-            ws = wb.create_sheet(title=sheet_name)
-            
-            headers = ['Element Unique ID', 'Element ID', 'IsType', 
-                      'RGU Numéro'] + param_names
-            styled_headers = create_styled_header_cells(ws, headers)
-            ws.append(styled_headers)
-            
-            for el in elements:
-                spatial_number = get_spatial_number(
-                    document, el, phase, has_rooms, has_spaces, linked_arc
-                )
-                
-                row = [
-                    el.UniqueId,
-                    el.Id.IntegerValue,
-                    isinstance(el, ElementType),
-                    spatial_number
-                ]
-                
-                for name in param_names:
-                    param = el.LookupParameter(name)
-                    value = param.AsValueString() if param and param.HasValue else ""
-                    row.append(value if value else "")
-                
-                ws.append(row)
-        
-        except Exception as e:
-            print("Erreur catégorie {}: {}".format(cat_name, str(e)))
-            continue
-    
-    wb.save(path)
-
-
-# ========== FONCTION: Export avec gestion d'erreurs ==========
-def export_with_error_handling(document, file_path):
-    """Fonction principale optimisée pour une seule maquette ARC."""
-    try:
-        # Obtenir la première phase (existant)
-        phase = get_existing_phase(document)
-        
-        if not phase:
-            MessageBox.Show(
-                "Aucune phase trouvée dans le document.",
-                "Erreur",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error
-            )
-            return False
-        
-        print("Phase utilisee: {} (premiere phase)".format(phase.Name))
-        
-        # Vérifier document actuel
-        has_rooms = has_rooms_in_document(document)
-        has_spaces = has_spaces_in_document(document)
-        
-        # Récupérer le document lié ARC si pas de Rooms localement
-        linked_arc = None
-        if not has_rooms:
-            print("Aucun Room dans le document actuel, recherche du lien ARC...")
-            linked_arc = get_arc_linked_document(document)
-            
-            if linked_arc:
-                print("Maquette ARC trouvee: {}".format(linked_arc['name']))
-        
-        # Informations pour l'utilisateur
-        spatial_info = []
-        if has_rooms:
-            spatial_info.append("Rooms (document actuel)")
-        if linked_arc:
-            spatial_info.append("Rooms (lien ARC: {})".format(linked_arc['name']))
-        if has_spaces:
-            spatial_info.append("Spaces (document actuel)")
-        
-        if not has_rooms and not linked_arc and not has_spaces:
-            MessageBox.Show(
-                "Aucun Room ni Space trouvé dans le document actuel ou lié.",
-                "Avertissement",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning
-            )
-        
-        # Collecte et export
-        sorted_elements = collect_and_sort_elements_optimized(document)
-        
-        if not sorted_elements:
-            MessageBox.Show(
-                "Aucun élément trouvé dans le projet.",
-                "Avertissement",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning
-            )
-            return False
-        
-        export_to_excel_optimized(sorted_elements, file_path, document, phase,
-                                  has_rooms, has_spaces, linked_arc)
-        
-        MessageBox.Show(
-            "Export Excel terminé :\n{}\n\nPhase: {} (première phase)\nSources spatiales:\n{}".format(
-                file_path,
-                phase.Name,
-                "\n".join("- " + info for info in spatial_info) if spatial_info else "- Aucune"
-            ),
-            "Succès",
-            MessageBoxButtons.OK,
-            MessageBoxIcon.Information
-        )
-        return True
-    
-    except Exception as e:
-        MessageBox.Show(
-            "Erreur lors de l'export :\n{}".format(str(e)),
-            "Erreur",
-            MessageBoxButtons.OK,
-            MessageBoxIcon.Error
-        )
-        return False
-
-
-# ========== PROGRAMME PRINCIPAL ==========
-file_path = get_save_path(doc)
-
-if not file_path:
-    MessageBox.Show(
-        "Export annulé par l'utilisateur.",
-        "Annulé",
-        MessageBoxButtons.OK,
-        MessageBoxIcon.Warning
+    vft = next(
+        (v for v in FilteredElementCollector(doc).OfClass(ViewFamilyType)
+         if v.ViewFamily == ViewFamily.ThreeDimensional),
+        None
     )
-    sys.exit()
+    if not vft:
+        raise Exception("Aucun type de vue 3D disponible")
 
-export_with_error_handling(doc, file_path)
+    t = Transaction(doc, "Créer vue 3D_IFC_EXPORT")
+    # ✅ Supprimer les avertissements dans la transaction
+    t.SetFailureHandlingOptions(
+        t.GetFailureHandlingOptions().SetFailuresPreprocessor(SilentFailuresPreprocessor())
+    )
+    try:
+        t.Start()
+        view_3d = View3D.CreateIsometric(doc, vft.Id)
+        view_3d.Name = "3D_IFC_EXPORT"
+
+        first_phase = doc.Phases.get_Item(0)
+        phase_param = view_3d.get_Parameter(BuiltInParameter.VIEW_PHASE)
+        if phase_param and not phase_param.IsReadOnly:
+            phase_param.Set(first_phase.Id)
+
+        t.Commit()
+        output.print_md("  - ✅ Vue créée et commitée")
+        return view_3d, first_phase.Name
+
+    except Exception as e:
+        if t.GetStatus() == TransactionStatus.Started:
+            t.RollBack()
+        raise Exception("Erreur création vue : {}".format(str(e)))
+
+
+# ──────────────────────────────────────────────────────────────
+# HELPER : export IFC
+# ✅ Transaction requise par l'API Revit — RollBack après export
+# ──────────────────────────────────────────────────────────────
+def export_ifc(doc, view_3d, dir_path, base_name):
+    ifc_options = IFCExportOptions()
+    ifc_options.FilterViewId = view_3d.Id
+    ifc_options.WallAndColumnSplitting = False
+    ifc_options.ExportBaseQuantities = False
+    ifc_options.SpaceBoundaryLevel = 0
+    ifc_options.FileVersion = IFCVersion.IFC2x3CV2
+    ifc_options.AddOption("Export2DElements", "false")
+    ifc_options.AddOption("ExportInternalRevitPropertySets", "false")
+    ifc_options.AddOption("ExportIFCCommonPropertySets", "true")
+    ifc_options.AddOption("ExportLinkedFiles", "false")
+    ifc_options.AddOption("VisibleElementsOfCurrentView", "true")
+    ifc_options.AddOption("UseActiveViewGeometry", "true")
+
+    t = Transaction(doc, "Export IFC")
+    # ✅ Supprimer les avertissements pendant l'export
+    t.SetFailureHandlingOptions(
+        t.GetFailureHandlingOptions().SetFailuresPreprocessor(SilentFailuresPreprocessor())
+    )
+    t.Start()
+    try:
+        success = doc.Export(dir_path, base_name, ifc_options)
+    finally:
+        t.RollBack()  # ✅ RollBack : export écrit sur disque, doc non modifié
+    return success
+
+
+# ──────────────────────────────────────────────────────────────
+# 1. Sélection du dossier
+# ──────────────────────────────────────────────────────────────
+folder = forms.pick_folder(title="Sélectionner le dossier racine des maquettes ARC")
+if not folder:
+    forms.alert("Aucun dossier sélectionné.", exitscript=True)
+
+
+# ──────────────────────────────────────────────────────────────
+# 2. Récupérer tous les *_ARC.rvt récursivement
+# ──────────────────────────────────────────────────────────────
+rvt_files = [
+    os.path.join(root, f)
+    for root, dirs, files in os.walk(folder)
+    for f in files
+    if "_arc" in f.lower() and f.lower().endswith(".rvt")
+]
+
+if not rvt_files:
+    forms.alert("Aucun fichier *_ARC.rvt trouvé.", exitscript=True)
+
+
+# ──────────────────────────────────────────────────────────────
+# 3. Aperçu dans l'output
+# ──────────────────────────────────────────────────────────────
+output.print_md("**Fichiers trouvés :** `{}`\n".format(len(rvt_files)))
+for f in sorted(rvt_files)[:5]:
+    output.print_md("- `{}`".format(os.path.relpath(f, folder)))
+if len(rvt_files) > 5:
+    output.print_md("- *... et {} autres fichiers*".format(len(rvt_files) - 5))
+
+
+# ──────────────────────────────────────────────────────────────
+# 4. Sélection dans une liste
+# ──────────────────────────────────────────────────────────────
+class RvtFileItem(forms.TemplateListItem):
+    @property
+    def name(self):
+        rel = os.path.relpath(self.item, folder)
+        return "{:<45} {}".format(
+            os.path.basename(self.item),
+            os.path.dirname(rel) or "."
+        )
+
+options = [RvtFileItem(p) for p in sorted(rvt_files)]
+
+selected_items = forms.SelectFromList.show(
+    options,
+    title="Sélectionner les maquettes à exporter en IFC",
+    button_name="Exporter en IFC",
+    multiselect=True
+)
+
+if not selected_items:
+    forms.alert("Aucun fichier sélectionné.", exitscript=True)
+
+selected_paths = [
+    item.item if hasattr(item, 'item') else item
+    for item in selected_items
+]
+
+
+# ──────────────────────────────────────────────────────────────
+# 5. Application Revit
+# ──────────────────────────────────────────────────────────────
+app = HOST_APP.uiapp.Application
+
+
+# ──────────────────────────────────────────────────────────────
+# 6. Boucle d'export
+# ──────────────────────────────────────────────────────────────
+results = []
+doc = None
+
+for file_path in selected_paths:
+    fname = os.path.basename(file_path)
+    output.print_md("---\n### ⚙️ Traitement : `{}`".format(fname))
+
+    try:
+        # ── Détection metadata sans ouvrir ────────────────────
+        try:
+            basic_info = BasicFileInfo.Extract(file_path)
+            is_workshared = basic_info.IsWorkshared
+            is_current_version = basic_info.SavedInCurrentVersion
+        except:
+            is_workshared = False
+            is_current_version = True
+
+        output.print_md("- Workshared : `{}`".format(is_workshared))
+        if not is_current_version:
+            output.print_md("- ⚠️ Version antérieure détectée — migration en mémoire")
+
+        # ── Ouverture légère ──────────────────────────────────
+        doc = open_doc(app, file_path, detach=False, is_workshared=is_workshared)
+        if not doc:
+            raise Exception("Impossible d'ouvrir le fichier")
+
+        # ── Chercher la vue ───────────────────────────────────
+        view_3d = find_ifc_view(doc)
+
+        if view_3d:
+            output.print_md("- ✅ Vue `3D_IFC_EXPORT` trouvée")
+        else:
+            doc.Close(False)
+            doc = None
+            output.print_md("- ⚠️ Vue absente — réouverture en mode détaché...")
+
+            doc = open_doc(app, file_path, detach=True, is_workshared=is_workshared)
+            if not doc:
+                raise Exception("Impossible de rouvrir en mode détaché")
+
+            view_3d, phase_name = create_ifc_view(doc)
+            output.print_md("- ✅ Vue créée (phase : *{}*)".format(phase_name))
+
+        # ── Export IFC ────────────────────────────────────────
+        dir_path = os.path.dirname(file_path)
+        base_name = os.path.splitext(fname)[0]
+
+        output.print_md("- Export IFC en cours...")
+        success = export_ifc(doc, view_3d, dir_path, base_name)
+
+        doc.Close(False)
+        doc = None
+
+        if success:
+            msg = "✅ Export OK → `{}.ifc`".format(base_name)
+        else:
+            msg = "⚠️ Export échoué (raison inconnue)"
+        output.print_md("- " + msg)
+        results.append("{} → {}".format(fname, msg))
+
+    except Exception as ex:
+        msg = "❌ Erreur : {}".format(str(ex))
+        output.print_md("- " + msg)
+        results.append("{} → {}".format(fname, msg))
+        if doc:
+            try:
+                if doc.IsValidObject:
+                    doc.Close(False)
+            except:
+                pass
+            doc = None
+
+
+# ──────────────────────────────────────────────────────────────
+# 7. Récapitulatif final
+# ──────────────────────────────────────────────────────────────
+output.print_md("\n---\n## 📋 Récapitulatif")
+output.print_md("**Total traité :** {} fichier(s)\n".format(len(selected_paths)))
+
+successes = [r for r in results if "✅" in r]
+warnings  = [r for r in results if "⚠️" in r]
+errors    = [r for r in results if "❌" in r]
+
+if successes:
+    output.print_md("### ✅ Succès ({})".format(len(successes)))
+    for r in successes:
+        output.print_md("- {}".format(r))
+if warnings:
+    output.print_md("### ⚠️ Avertissements ({})".format(len(warnings)))
+    for r in warnings:
+        output.print_md("- {}".format(r))
+if errors:
+    output.print_md("### ❌ Erreurs ({})".format(len(errors)))
+    for r in errors:
+        output.print_md("- {}".format(r))
+
+output.print_md("\n---\n**🏁 Traitement terminé !**")
