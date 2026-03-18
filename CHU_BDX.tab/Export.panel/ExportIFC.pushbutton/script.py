@@ -1,10 +1,4 @@
 # -*- coding: utf-8 -*-
-__title__ = "Export IFC\nARC"
-__doc__ = """Export IFC des maquettes *_ARC.rvt
-depuis un dossier et ses sous-dossiers.
-- Détache automatiquement les fichiers workshared
-- Crée la vue 3D_IFC_EXPORT si absente (phase 1)
-- Ferme sans enregistrer dans tous les cas"""
 
 import os
 import re
