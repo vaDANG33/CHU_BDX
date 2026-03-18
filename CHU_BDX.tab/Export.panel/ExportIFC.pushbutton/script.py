@@ -131,7 +131,8 @@ rvt_files = [
     os.path.join(root, f)
     for root, dirs, files in os.walk(folder)
     for f in files
-    if re.search(r'_arc', f.lower()) and f.lower().endswith(".rvt")
+    if f.lower().endswith("_arc.rvt")
+    #if re.search(r'_arc', f.lower()) and f.lower().endswith(".rvt")
 ]
 
 if not rvt_files:
